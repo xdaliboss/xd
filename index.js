@@ -1,11 +1,12 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { initializeApp, applicationDefault, cert } from "firebase-admin/app";
+import { initializeApp, cert } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getDatabase } from "firebase-admin/database";
 import path from "path";
 import { fileURLToPath } from "url";
+import fs from "fs";
 
 dotenv.config();
 
@@ -16,14 +17,21 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// --- Load Firebase Service Account Key ---
+const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_KEY || "./serviceAccountKey.json";
+
+if (!fs.existsSync(serviceAccountPath)) {
+  console.error(`❌ Missing service account key file at ${serviceAccountPath}`);
+  process.exit(1);
+}
+
+const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, "utf8"));
+
 // --- Firebase Admin Initialization ---
+console.log("✅ Initializing Firebase Admin SDK...");
 initializeApp({
-  credential: cert({
-    projectId: process.env.FIREBASE_PROJECT_ID,
-    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-    privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
-  }),
-  databaseURL: process.env.FIREBASE_DATABASE_URL,
+  credential: cert(serviceAccount),
+  databaseURL: process.env.FIREBASE_DATABASE_URL, // still needs to be in .env
 });
 
 const db = getDatabase();
@@ -33,11 +41,13 @@ const db = getDatabase();
 // Fetch user releases (SECURE)
 app.get("/api/releases/:uid", async (req, res) => {
   try {
+    console.log(`📡 [API] Fetching releases for UID: ${req.params.uid}`);
     const snapshot = await db.ref(`users/${req.params.uid}/releases`).get();
+    console.log("🔎 Snapshot exists:", snapshot.exists());
     if (!snapshot.exists()) return res.json([]);
     res.json(snapshot.val());
   } catch (error) {
-    console.error("Error fetching releases:", error);
+    console.error("❌ Error fetching releases:", error);
     res.status(500).json({ error: "Failed to fetch releases." });
   }
 });
@@ -45,22 +55,24 @@ app.get("/api/releases/:uid", async (req, res) => {
 // Fetch user subscription (SECURE)
 app.get("/api/subscription/:uid", async (req, res) => {
   try {
+    console.log(`📡 [API] Fetching subscription for UID: ${req.params.uid}`);
     const snapshot = await db.ref(`users/${req.params.uid}/subscription`).get();
     res.json(snapshot.val() || {});
   } catch (error) {
-    console.error("Error fetching subscription:", error);
+    console.error("❌ Error fetching subscription:", error);
     res.status(500).json({ error: "Failed to fetch subscription." });
   }
 });
 
-// Delete user account (secure)
+// Delete user account (SECURE)
 app.delete("/api/delete-account/:uid", async (req, res) => {
   try {
+    console.log(`⚠️ [API] Deleting account for UID: ${req.params.uid}`);
     await db.ref(`users/${req.params.uid}`).remove();
     await getAuth().deleteUser(req.params.uid);
     res.json({ success: true });
   } catch (error) {
-    console.error("Error deleting account:", error);
+    console.error("❌ Error deleting account:", error);
     res.status(500).json({ error: "Failed to delete account." });
   }
 });
