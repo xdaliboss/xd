@@ -41,11 +41,22 @@ const db = getDatabase();
 // Fetch user releases (SECURE)
 app.get("/api/releases/:uid", async (req, res) => {
   try {
-    console.log(`📡 [API] Fetching releases for UID: ${req.params.uid}`);
-    const snapshot = await db.ref(`users/${req.params.uid}/releases`).get();
-    console.log("🔎 Snapshot exists:", snapshot.exists());
-    if (!snapshot.exists()) return res.json([]);
-    res.json(snapshot.val());
+    console.log("📥 API Request: /api/releases/", req.params.uid);
+    const refPath = `users/${req.params.uid}/releases`;
+    console.log("🔗 Database Path:", refPath);
+
+    const snapshot = await db.ref(refPath).get();
+    console.log("📤 Snapshot exists?", snapshot.exists());
+
+    if (!snapshot.exists()) {
+      console.log("⚠️ No releases found for user:", req.params.uid);
+      return res.json([]);
+    }
+
+    const data = snapshot.val();
+    console.log("✅ Releases fetched:", Object.keys(data).length, "items");
+    res.json(data);
+
   } catch (error) {
     console.error("❌ Error fetching releases:", error);
     res.status(500).json({ error: "Failed to fetch releases." });
