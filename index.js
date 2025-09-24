@@ -1,96 +1,90 @@
 import express from "express";
 import cors from "cors";
+import bodyParser from "body-parser";
 import dotenv from "dotenv";
-import { initializeApp, cert } from "firebase-admin/app";
-import { getAuth } from "firebase-admin/auth";
-import { getDatabase } from "firebase-admin/database";
-import path from "path";
-import { fileURLToPath } from "url";
-import fs from "fs";
+import admin from "firebase-admin";
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
 const app = express();
 app.use(cors());
-app.use(express.json());
-
-// --- Load Firebase Service Account Key ---
-const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_KEY || "./serviceAccountKey.json";
-
-if (!fs.existsSync(serviceAccountPath)) {
-  console.error(`❌ Missing service account key file at ${serviceAccountPath}`);
-  process.exit(1);
-}
-
-const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, "utf8"));
+app.use(bodyParser.json());
 
 // --- Firebase Admin Initialization ---
-console.log("✅ Initializing Firebase Admin SDK...");
-initializeApp({
-  credential: cert(serviceAccount),
-  databaseURL: process.env.FIREBASE_DATABASE_URL, // still needs to be in .env
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+  databaseURL: process.env.FIREBASE_DATABASE_URL
 });
 
-const db = getDatabase();
+const db = admin.database();
+const auth = admin.auth();
 
-// --- API ROUTES ---
+// --- Routes ---
 
-// Fetch user releases (SECURE)
-app.get("/api/releases/:uid", async (req, res) => {
+app.post("/user/:uid", async (req, res) => {
   try {
-    console.log("📥 API Request: /api/releases/", req.params.uid);
-    const refPath = `users/${req.params.uid}/releases`;
-    console.log("🔗 Database Path:", refPath);
-
-    const snapshot = await db.ref(refPath).get();
-    console.log("📤 Snapshot exists?", snapshot.exists());
+    const uid = req.params.uid;
+    const ref = db.ref(`users/${uid}`);
+    const snapshot = await ref.get();
 
     if (!snapshot.exists()) {
-      console.log("⚠️ No releases found for user:", req.params.uid);
-      return res.json([]);
+      await ref.set({
+        accountStatus: "active",
+        subscription: { plan1: 0, plan2: 0, plan3: 0, custom: 0 }
+      });
     }
-
-    const data = snapshot.val();
-    console.log("✅ Releases fetched:", Object.keys(data).length, "items");
-    res.json(data);
-
-  } catch (error) {
-    console.error("❌ Error fetching releases:", error);
-    res.status(500).json({ error: "Failed to fetch releases." });
+    res.json({ message: "User created/verified in database." });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Fetch user subscription (SECURE)
-app.get("/api/subscription/:uid", async (req, res) => {
+// Signup
+app.post("/auth/signup", async (req, res) => {
   try {
-    console.log(`📡 [API] Fetching subscription for UID: ${req.params.uid}`);
-    const snapshot = await db.ref(`users/${req.params.uid}/subscription`).get();
-    res.json(snapshot.val() || {});
-  } catch (error) {
-    console.error("❌ Error fetching subscription:", error);
-    res.status(500).json({ error: "Failed to fetch subscription." });
+    const { email, password } = req.body;
+    const userRecord = await auth.createUser({ email, password });
+
+    await db.ref(`users/${userRecord.uid}`).set({
+      accountStatus: "active",
+      subscription: { plan1: 0, plan2: 0, plan3: 0, custom: 0 }
+    });
+
+    // Send email verification link
+    const link = await auth.generateEmailVerificationLink(email);
+    res.status(201).json({ message: "User created. Verify email.", verifyLink: link });
+  } catch (err) {
+    console.error(err);
+    res.status(400).json({ error: err.message });
   }
 });
 
-// Delete user account (SECURE)
-app.delete("/api/delete-account/:uid", async (req, res) => {
+// Login
+app.post("/auth/login", async (req, res) => {
+  // NOTE: Firebase Admin SDK cannot verify password directly.
+  // Normally, you'd use Firebase Client SDK for password verification,
+  // or implement a custom token workflow.
+  res.status(501).json({ error: "Login must be handled by client SDK." });
+});
+
+// Fetch user data
+app.get("/user/:uid", async (req, res) => {
   try {
-    console.log(`⚠️ [API] Deleting account for UID: ${req.params.uid}`);
-    await db.ref(`users/${req.params.uid}`).remove();
-    await getAuth().deleteUser(req.params.uid);
-    res.json({ success: true });
-  } catch (error) {
-    console.error("❌ Error deleting account:", error);
-    res.status(500).json({ error: "Failed to delete account." });
+    const snapshot = await db.ref(`users/${req.params.uid}`).get();
+    if (!snapshot.exists()) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    res.json(snapshot.val());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Serve frontend files
-app.use(express.static(path.join(__dirname, "public"))); // put dashboard.html inside /public
-
-app.listen(process.env.PORT || 3000, () => {
-  console.log(`✅ Server running on port ${process.env.PORT || 3000}`);
+app.get("/", (req, res) => {
+  res.send("API is running!");
 });
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
